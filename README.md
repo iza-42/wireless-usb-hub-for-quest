@@ -45,8 +45,8 @@ Other Quest models should work but are untested. Please open an issue with your 
 
 ## Usage
 
-1. On the Quest, open **Quest USB/IP** (Library → Unknown Sources). The window shows the headset's IP address and the shared devices.
-2. Plug the USB device into the Quest and accept the USB permission prompt.
+1. Plug the USB device into the Quest. The app starts by itself in the background, with no window. The first time, Horizon OS may ask which app should open the device: pick **Quest USB/IP** and tick "always". You can also open **Quest USB/IP** yourself (Library → Unknown Sources) to see the headset's IP address and the shared devices.
+2. If a USB permission prompt appears, accept it.
 3. On the PC, list the devices and attach the one you want:
    ```
    usbip list -r <quest-ip>
@@ -54,6 +54,7 @@ Other Quest models should work but are untested. Please open an issue with your 
    ```
    You can also use the `wusbip` GUI that ships with usbip-win2.
 4. When you're done: `usbip detach -p <port>` (see `usbip port`).
+5. Unplug the device. When no USB device is left, the app closes itself after 15 s to save the headset's battery. If you open it with nothing plugged in, it closes after 60 s.
 
 ### VIVE Facial Tracker
 
@@ -71,7 +72,7 @@ Notes:
 
 ## How it works
 
-- `UsbIpService` (Java) runs as a foreground service. It requests USB permission for each attached device, opens it through `UsbManager` and passes the usbdevfs file descriptor plus raw descriptors to native code. It also holds a wake lock and a low-latency Wi-Fi lock so the headset keeps serving while it is on your face.
+- `UsbIpService` (Java) runs as a foreground service. It requests USB permission for each attached device, opens it through `UsbManager` and passes the usbdevfs file descriptor plus raw descriptors to native code. It also holds a wake lock and a low-latency Wi-Fi lock so the headset keeps serving while it is on your face. Once no USB device is attached, it stops and the process exits, so those locks don't drain the battery.
 - `usbip.c` (JNI) implements a USB/IP 1.1.1 server on TCP **3240**. It handles `OP_REQ_DEVLIST` and `OP_REQ_IMPORT`, then forwards `CMD_SUBMIT` / `CMD_UNLINK` as **asynchronous usbdevfs URBs** (`USBDEVFS_SUBMITURB` / `REAPURBNDELAY` / `DISCARDURB`). Going below the Java `UsbRequest` API is what makes isochronous transfers possible without root. It also:
   - runs `SET_CONFIGURATION`, `SET_INTERFACE` and `CLEAR_FEATURE(HALT)` locally through the matching ioctls;
   - splits iso transfers larger than 128 packets, the per-URB limit of usbdevfs;
@@ -99,7 +100,7 @@ To log every control transfer, build with `-DVERBOSE_CONTROL` (add it to `LOCAL_
 | Symptom | Fix |
 |---|---|
 | "USB permission DENIED" in the app | Make sure both camera permissions are granted (Settings → Apps → Quest USB/IP), or reinstall with `adb install -g`. Then press "Volver a pedir permisos USB" (request USB permissions again). |
-| `usbip list` shows nothing / times out | Check the Quest IP shown in the app. Allow inbound TCP 3240 on the Quest's network. Keep the app open after a reboot, since it does not start on its own. |
+| `usbip list` shows nothing / times out | Check the Quest IP shown in the app. Allow inbound TCP 3240 on the Quest's network. The app only runs while a USB device is plugged in. Replug the device, or open the app. |
 | Device appears but another app grabs it | Close other USB apps on the Quest (e.g. VirtualHere). |
 | Lag / dropped frames | It's Wi-Fi bandwidth. Use 5 GHz, move closer, lower the Virtual Desktop bitrate. |
 

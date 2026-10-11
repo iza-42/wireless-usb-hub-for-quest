@@ -18,6 +18,7 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.os.SystemClock;
 import android.util.Log;
 
 import java.util.HashMap;
@@ -34,6 +35,9 @@ public class UsbIpService extends Service {
     static final String ACTION_PERMISSION = "com.questusbip.USB_PERMISSION";
     static final String ACTION_RESCAN = "com.questusbip.RESCAN";
     static final int PORT = 3240;
+    /** With no USB device plugged in, shut down after this long (saves the headset battery). */
+    static final long IDLE_AFTER_START_MS = 60_000;
+    static final long IDLE_AFTER_DETACH_MS = 15_000;
 
     /** Last Java-side event, shown in the activity. */
     static volatile String lastEvent = "";
@@ -45,6 +49,9 @@ public class UsbIpService extends Service {
     private final Set<String> asked = new HashSet<>();
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    /** When the device list was last seen non-empty (or the service started). */
+    private long lastDeviceSeen;
+    private long idleTimeout = IDLE_AFTER_START_MS;
 
     private final BroadcastReceiver receiver = new BroadcastReceiver() {
         @Override
@@ -56,6 +63,8 @@ public class UsbIpService extends Service {
                     asked.remove(dev.getDeviceName());
                     unshare(dev.getDeviceName());
                 }
+                idleTimeout = IDLE_AFTER_DETACH_MS;
+                scan();
             } else if (ACTION_PERMISSION.equals(action)) {
                 boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
                 event("Permiso USB " + (granted ? "concedido" : "DENEGADO") + (dev != null ? " para " + describe(dev) : ""));
@@ -70,6 +79,11 @@ public class UsbIpService extends Service {
         @Override
         public void run() {
             scan();
+            if (SystemClock.elapsedRealtime() - lastDeviceSeen > idleTimeout) {
+                event("Sin dispositivos USB: cerrando para ahorrar batería");
+                stopSelf();
+                return;
+            }
             handler.postDelayed(this, 3000);
         }
     };
@@ -79,6 +93,7 @@ public class UsbIpService extends Service {
         super.onCreate();
         usb = (UsbManager) getSystemService(USB_SERVICE);
         handler = new Handler(Looper.getMainLooper());
+        lastDeviceSeen = SystemClock.elapsedRealtime();
         startForeground(1, buildNotification());
 
         int r = Native.startServer(PORT);
@@ -110,6 +125,7 @@ public class UsbIpService extends Service {
     }
 
     private void scan() {
+        if (!usb.getDeviceList().isEmpty()) lastDeviceSeen = SystemClock.elapsedRealtime();
         for (UsbDevice dev : usb.getDeviceList().values()) {
             String name = dev.getDeviceName();
             if (slots.containsKey(name)) continue;
@@ -183,6 +199,9 @@ public class UsbIpService extends Service {
         if (wakeLock.isHeld()) wakeLock.release();
         if (wifiLock.isHeld()) wifiLock.release();
         super.onDestroy();
+        // Also tear down the native server threads and any open status panel; the next
+        // USB attach starts everything again from scratch.
+        android.os.Process.killProcess(android.os.Process.myPid());
     }
 
     @Override
